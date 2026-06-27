@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Divisor de Cuentas 🍽️</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app-header">
+  <span class="logo">🍽️</span>
+  <div>
+    <h1>Divisor de Cuentas</h1>
+    <div class="subtitle">Organiza quién paga qué</div>
+  </div>
+</div>
+
+<div class="container" id="app">
+
+  <!-- STEP 0: Setup -->
+  <div id="step-setup">
+    <div class="steps">
+      <div class="step active"><span class="step-num">1</span>Configurar</div>
+      <div class="step"><span class="step-num">2</span>Boleta</div>
+      <div class="step"><span class="step-num">3</span>Comensales</div>
+      <div class="step"><span class="step-num">4</span>Compartir</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="icon">💰</span> Moneda</div>
+      <div class="currency-row" id="currency-pills">
+        <div class="currency-pill active" data-currency="PEN" data-symbol="S/">🇵🇪 Soles (S/)</div>
+        <div class="currency-pill" data-currency="USD" data-symbol="$">🇺🇸 Dólares ($)</div>
+        <div class="currency-pill" data-currency="EUR" data-symbol="€">🇪🇺 Euros (€)</div>
+        <div class="currency-pill" data-currency="COP" data-symbol="$">🇨🇴 Pesos COP</div>
+        <div class="currency-pill" data-currency="MXN" data-symbol="$">🇲🇽 Pesos MXN</div>
+        <div class="currency-pill" data-currency="ARS" data-symbol="$">🇦🇷 Pesos ARS</div>
+      </div>
+    </div>
+
+    <button class="btn btn-primary" onclick="startSession()">
+      Comenzar ➜
+    </button>
+  </div>
+
+  <!-- STEP 1: Receipt scan -->
+  <div id="step-receipt" style="display:none">
+    <div class="steps">
+      <div class="step done"><span class="step-num">✓</span>Configurar</div>
+      <div class="step active"><span class="step-num">2</span>Boleta</div>
+      <div class="step"><span class="step-num">3</span>Comensales</div>
+      <div class="step"><span class="step-num">4</span>Compartir</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="icon">📷</span> Foto de la Boleta</div>
+      <div class="upload-zone" id="upload-zone">
+        <input type="file" id="receipt-file" accept="image/*" capture="environment" onchange="handleFileChange(event)">
+        <div class="upload-icon">📸</div>
+        <p><strong>Toca para tomar foto</strong><br>o selecciona de tu galería</p>
+      </div>
+      <img id="receipt-preview" class="receipt-preview" style="display:none; margin-top:12px;">
+    </div>
+
+    <div id="scan-loading" style="display:none">
+      <div class="card loading">
+        <div class="spinner"></div>
+        <p style="color:var(--text-secondary); font-size:14px">La IA está leyendo la boleta…</p>
+      </div>
+    </div>
+
+    <div id="items-section" style="display:none">
+      <div class="card">
+        <div class="card-title"><span class="icon">🧾</span> Ítems detectados <span id="items-count" class="badge badge-orange">0</span></div>
+        <p style="font-size:13px; color:var(--text-secondary); margin-bottom:14px">Revisa y corrige si es necesario:</p>
+        <div id="items-list" class="items-list"></div>
+        <button class="btn btn-outline" style="margin-top:12px; width:auto; padding:10px 16px; font-size:13px" onclick="addItemManual()">
+          + Agregar ítem manualmente
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span class="icon">🤌</span> Propina</div>
+        <div class="tip-mode-tabs">
+          <div class="tip-tab active" id="tab-amount" onclick="setTipMode('amount')">Monto fijo</div>
+          <div class="tip-tab" id="tab-percent" onclick="setTipMode('percent')">Porcentaje</div>
+          <div class="tip-tab" id="tab-none" onclick="setTipMode('none')">Sin propina</div>
+        </div>
+        <div id="tip-amount-input" class="input-group">
+          <label>Monto de propina (<span class="currency-symbol-label"></span>)</label>
+          <input type="number" id="tip-amount" placeholder="0.00" step="0.01" min="0" oninput="updateTip()">
+        </div>
+        <div id="tip-percent-input" class="input-group" style="display:none">
+          <label>Porcentaje de propina (%)</label>
+          <input type="number" id="tip-percent" placeholder="10" step="0.5" min="0" max="100" oninput="updateTip()">
+        </div>
+        <div class="divider"></div>
+        <div class="section-label">¿Cómo se divide la propina?</div>
+        <div class="tip-split-row">
+          <div class="split-option active" id="split-proportional" onclick="setTipSplit('proportional')">
+            📊 Proporcional al consumo
+          </div>
+          <div class="split-option" id="split-equal" onclick="setTipSplit('equal')">
+            ⚖️ Igual entre todos
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" onclick="goToStep('diners')">
+        Continuar → Comensales
+      </button>
+    </div>
+
+    <div id="no-api-key" style="display:none">
+      <div class="card" style="border:2px solid var(--warning)">
+        <div class="card-title"><span class="icon">⚠️</span> Modo manual (sin IA)</div>
+        <p style="font-size:13px; color:var(--text-secondary); margin-bottom:14px">
+          No se encontró la ANTHROPIC_API_KEY. Agrega ítems manualmente:
+        </p>
+        <div id="items-list-manual" class="items-list"></div>
+        <button class="btn btn-outline" style="margin-top:12px; width:auto; padding:10px 16px; font-size:13px" onclick="addItemManual()">
+          + Agregar ítem
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span class="icon">🤌</span> Propina</div>
+        <div class="tip-mode-tabs">
+          <div class="tip-tab active" id="tab-amount2" onclick="setTipMode('amount')">Monto fijo</div>
+          <div class="tip-tab" id="tab-percent2" onclick="setTipMode('percent')">Porcentaje</div>
+          <div class="tip-tab" id="tab-none2" onclick="setTipMode('none')">Sin propina</div>
+        </div>
+        <div class="input-group">
+          <label>Monto de propina (<span class="currency-symbol-label"></span>)</label>
+          <input type="number" id="tip-amount-m" placeholder="0.00" step="0.01" min="0" oninput="updateTip()">
+        </div>
+        <div class="divider"></div>
+        <div class="section-label">¿Cómo se divide la propina?</div>
+        <div class="tip-split-row">
+          <div class="split-option active" id="split-proportional2" onclick="setTipSplit('proportional')">
+            📊 Proporcional
+          </div>
+          <div class="split-option" id="split-equal2" onclick="setTipSplit('equal')">
+            ⚖️ Igual entre todos
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="goToStep('diners')">
+        Continuar → Comensales
+      </button>
+    </div>
+  </div>
+
+  <!-- STEP 2: Diners -->
+  <div id="step-diners" style="display:none">
+    <div class="steps">
+      <div class="step done"><span class="step-num">✓</span>Configurar</div>
+      <div class="step done"><span class="step-num">✓</span>Boleta</div>
+      <div class="step active"><span class="step-num">3</span>Comensales</div>
+      <div class="step"><span class="step-num">4</span>Compartir</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="icon">👥</span> ¿Quiénes son?</div>
+      <div id="diners-chips" class="diners-list"></div>
+      <div class="add-diner-row">
+        <input type="text" id="new-diner-name" placeholder="Nombre del comensal" maxlength="30"
+          onkeypress="if(event.key==='Enter') addDiner()">
+        <button class="btn btn-primary btn-sm" onclick="addDiner()">+ Agregar</button>
+      </div>
+    </div>
+
+    <div id="diners-enough" style="display:none">
+      <button class="btn btn-primary" onclick="goToShare()">
+        Generar link para compartir →
+      </button>
+    </div>
+  </div>
+
+  <!-- STEP 3: Share + Monitor -->
+  <div id="step-share" style="display:none">
+    <div class="steps">
+      <div class="step done"><span class="step-num">✓</span>Configurar</div>
+      <div class="step done"><span class="step-num">✓</span>Boleta</div>
+      <div class="step done"><span class="step-num">✓</span>Comensales</div>
+      <div class="step active"><span class="step-num">4</span>Compartir</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="icon">🔗</span> Comparte el link</div>
+      <div class="share-box">
+        <div class="link-text" id="share-link-text"></div>
+      </div>
+      <div style="display:flex; gap:8px; flex-direction:column">
+        <button class="btn btn-whatsapp" onclick="shareWhatsApp()">
+          <span>📱</span> Compartir por WhatsApp
+        </button>
+        <button class="btn btn-outline" onclick="copyLink()">
+          <span>📋</span> Copiar link
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="icon">📊</span> Estado de comensales</div>
+      <div id="diners-status-list"></div>
+      <button class="btn btn-outline" style="margin-top:12px" onclick="refreshTotals()">
+        🔄 Actualizar
+      </button>
+    </div>
+
+    <div id="totals-section" style="display:none">
+      <div class="card">
+        <div class="card-title"><span class="icon">💳</span> Resumen de pagos</div>
+        <table class="summary-table">
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Consumo</th>
+              <th>Propina</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody id="summary-tbody"></tbody>
+        </table>
+      </div>
+      <div class="grand-total">
+        <div>
+          <div class="label">Total general</div>
+          <div style="font-size:12px; opacity:0.75" id="tip-display"></div>
+        </div>
+        <div class="amount" id="grand-total-display"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let state = {
+  sessionId: null,
+  currency: 'PEN',
+  currencySymbol: 'S/',
+  tipMode: 'amount',
+  tipSplit: 'proportional',
+  items: [],
+  diners: [],
+  nextItemId: 1
+};
+
+// Currency selection
+document.querySelectorAll('.currency-pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    document.querySelectorAll('.currency-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    state.currency = pill.dataset.currency;
+    state.currencySymbol = pill.dataset.symbol;
+    document.querySelectorAll('.currency-symbol-label').forEach(el => el.textContent = state.currencySymbol);
+  });
+});
+
+async function startSession() {
+  try {
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currency: state.currency, currencySymbol: state.currencySymbol })
+    });
+    const data = await res.json();
+    state.sessionId = data.id;
+    document.querySelectorAll('.currency-symbol-label').forEach(el => el.textContent = state.currencySymbol);
+    showStep('receipt');
+
+    // Check API key availability by testing a dummy request
+    // We'll try to show the manual section if scan fails
+  } catch(e) {
+    showToast('Error al iniciar sesión');
+  }
+}
+
+function showStep(name) {
+  ['setup','receipt','diners','share'].forEach(s => {
+    document.getElementById('step-' + s).style.display = s === name ? 'block' : 'none';
+  });
+}
+
+function handleFileChange(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const preview = document.getElementById('receipt-preview');
+    preview.src = ev.target.result;
+    preview.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+  uploadAndScan(file);
+}
+
+async function uploadAndScan(file) {
+  document.getElementById('scan-loading').style.display = 'block';
+  document.getElementById('items-section').style.display = 'none';
+  document.getElementById('no-api-key').style.display = 'none';
+
+  const formData = new FormData();
+  formData.append('receipt', file);
+
+  try {
+    const res = await fetch(`/api/sessions/${state.sessionId}/scan`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    document.getElementById('scan-loading').style.display = 'none';
+
+    if (!res.ok) {
+      if (data.error && data.error.includes('ANTHROPIC_API_KEY')) {
+        showManualMode();
+      } else {
+        showToast('⚠️ ' + (data.error || 'Error al leer la boleta'));
+        showManualMode();
+      }
+      return;
+    }
+
+    state.items = data.items;
+    state.nextItemId = state.items.length + 1;
+
+    // Pre-fill tip if detected
+    if (data.tip && data.tip > 0) {
+      document.getElementById('tip-amount').value = data.tip.toFixed(2);
+    }
+
+    renderItems();
+    document.getElementById('items-section').style.display = 'block';
+    document.getElementById('items-count').textContent = state.items.length;
+    showToast('✅ ' + state.items.length + ' ítems detectados');
+  } catch(e) {
+    document.getElementById('scan-loading').style.display = 'none';
+    showToast('Error de conexión');
+    showManualMode();
+  }
+}
+
+function showManualMode() {
+  document.getElementById('no-api-key').style.display = 'block';
+  renderItems(true);
+}
+
+function renderItems(manual = false) {
+  const containerId = manual ? 'items-list-manual' : 'items-list';
+  const container = document.getElementById(containerId);
+  if (!manual) {
+    // Also sync to items-list
+    const c2 = document.getElementById('items-list');
+    if (c2) renderItemsTo(c2);
+  } else {
+    renderItemsTo(container);
+  }
+  if (!manual) renderItemsTo(document.getElementById('items-list'));
+}
+
+function renderItemsTo(container) {
+  container.innerHTML = '';
+  state.items.forEach((item, idx) => {
+    const row = document.createElement('div');
+    row.className = 'item-row';
+    row.style.flexDirection = 'column';
+    row.style.alignItems = 'stretch';
+    row.innerHTML = `
+      <div class="item-edit-row">
+        <input class="item-edit-name" type="text" value="${escHtml(item.name)}" placeholder="Nombre"
+          oninput="updateItem(${idx}, 'name', this.value)">
+        <input class="item-edit-qty" type="number" value="${item.quantity}" min="1"
+          oninput="updateItem(${idx}, 'quantity', this.value)" title="Cantidad">
+        <input class="item-edit-price" type="number" value="${item.price.toFixed(2)}" min="0" step="0.01"
+          oninput="updateItem(${idx}, 'price', this.value)" placeholder="Precio">
+        <button onclick="removeItem(${idx})" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--danger);padding:0 4px">🗑</button>
+      </div>
+    `;
+    container.appendChild(row);
+  });
+}
+
+function updateItem(idx, field, value) {
+  if (field === 'price' || field === 'quantity') value = parseFloat(value) || 0;
+  state.items[idx][field] = value;
+  syncItemsToServer();
+}
+
+function removeItem(idx) {
+  state.items.splice(idx, 1);
+  renderItems();
+  renderItems(true);
+  syncItemsToServer();
+}
+
+function addItemManual() {
+  state.items.push({ id: String(state.nextItemId++), name: 'Nuevo ítem', price: 0, quantity: 1 });
+  renderItems();
+  renderItems(true);
+  document.getElementById('items-section').style.display = 'block';
+  document.getElementById('items-count').textContent = state.items.length;
+}
+
+async function syncItemsToServer() {
+  await fetch(`/api/sessions/${state.sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items: state.items })
+  });
+}
+
+// Tip
+function setTipMode(mode) {
+  state.tipMode = mode;
+  ['amount','percent','none'].forEach(m => {
+    const t1 = document.getElementById('tab-' + m);
+    const t2 = document.getElementById('tab-' + m + '2');
+    if (t1) t1.classList.toggle('active', m === mode);
+    if (t2) t2.classList.toggle('active', m === mode);
+  });
+  document.getElementById('tip-amount-input').style.display = mode === 'amount' ? 'block' : 'none';
+  document.getElementById('tip-percent-input').style.display = mode === 'percent' ? 'block' : 'none';
+  updateTip();
+}
+
+function setTipSplit(split) {
+  state.tipSplit = split;
+  ['proportional','equal'].forEach(s => {
+    const t1 = document.getElementById('split-' + s);
+    const t2 = document.getElementById('split-' + s + '2');
+    if (t1) t1.classList.toggle('active', s === split);
+    if (t2) t2.classList.toggle('active', s === split);
+  });
+  updateTip();
+}
+
+async function updateTip() {
+  const tipData = { mode: state.tipMode, split: state.tipSplit };
+  if (state.tipMode === 'amount') {
+    const v1 = parseFloat(document.getElementById('tip-amount').value) || 0;
+    const v2 = parseFloat(document.getElementById('tip-amount-m')?.value) || 0;
+    tipData.amount = v1 || v2;
+  } else if (state.tipMode === 'percent') {
+    tipData.percent = parseFloat(document.getElementById('tip-percent').value) || 0;
+  } else {
+    tipData.amount = 0;
+  }
+  await fetch(`/api/sessions/${state.sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tip: tipData })
+  });
+}
+
+// Diners
+function goToStep(step) {
+  if (step === 'diners') {
+    // Save items first
+    syncItemsToServer().then(() => updateTip()).then(() => showStep('diners'));
+  }
+}
+
+function addDiner() {
+  const input = document.getElementById('new-diner-name');
+  const name = input.value.trim();
+  if (!name) return;
+  if (state.diners.find(d => d.name.toLowerCase() === name.toLowerCase())) {
+    showToast('Ya existe ese nombre');
+    return;
+  }
+  const diner = { id: uuidShort(), name };
+  state.diners.push(diner);
+  input.value = '';
+  renderDiners();
+  saveDiners();
+}
+
+function removeDiner(id) {
+  state.diners = state.diners.filter(d => d.id !== id);
+  renderDiners();
+  saveDiners();
+}
+
+function renderDiners() {
+  const container = document.getElementById('diners-chips');
+  container.innerHTML = '';
+  state.diners.forEach(d => {
+    const chip = document.createElement('div');
+    chip.className = 'diner-chip';
+    chip.innerHTML = `
+      <span>👤</span>
+      <span>${escHtml(d.name)}</span>
+      <button class="remove-btn" onclick="removeDiner('${d.id}')">×</button>
+    `;
+    container.appendChild(chip);
+  });
+  document.getElementById('diners-enough').style.display = state.diners.length >= 2 ? 'block' : 'none';
+}
+
+async function saveDiners() {
+  await fetch(`/api/sessions/${state.sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ diners: state.diners })
+  });
+}
+
+async function goToShare() {
+  await saveDiners();
+  await fetch(`/api/sessions/${state.sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'open' })
+  });
+  setupShareStep();
+  showStep('share');
+  autoRefresh();
+}
+
+function getJoinUrl() {
+  return `${window.location.origin}/join/${state.sessionId}`;
+}
+
+function setupShareStep() {
+  const url = getJoinUrl();
+  document.getElementById('share-link-text').textContent = url;
+  renderDinerStatus();
+}
+
+function shareWhatsApp() {
+  const url = getJoinUrl();
+  const subtotal = state.items.reduce((s, i) => s + i.price * i.quantity, 0);
+  const msg = `🍽️ ¡Hora de dividir la cuenta!\n\nAbre el link para seleccionar lo que consumiste:\n${url}\n\n_Total boleta: ${state.currencySymbol} ${subtotal.toFixed(2)}_`;
+  window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+function copyLink() {
+  const url = getJoinUrl();
+  navigator.clipboard.writeText(url).then(() => showToast('✅ Link copiado'));
+}
+
+async function refreshTotals() {
+  const res = await fetch(`/api/sessions/${state.sessionId}`);
+  const session = await res.json();
+  state.diners = session.diners;
+  renderDinerStatus(session);
+
+  const allDone = state.diners.every(d =>
+    session.assignments[d.id] !== undefined || session.manualAmounts[d.id] !== undefined
+  );
+
+  if (state.diners.length > 0 && allDone) {
+    const totRes = await fetch(`/api/sessions/${state.sessionId}/totals`);
+    const totals = await totRes.json();
+    renderTotals(totals);
+  }
+}
+
+function renderDinerStatus(session) {
+  const container = document.getElementById('diners-status-list');
+  if (!session) { container.innerHTML = '<p style="color:var(--text-secondary);font-size:14px">Cargando...</p>'; return; }
+  container.innerHTML = '';
+  state.diners.forEach(d => {
+    const hasDone = session.assignments[d.id] !== undefined || session.manualAmounts[d.id] !== undefined;
+    const row = document.createElement('div');
+    row.className = 'diner-status-row';
+    row.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px">
+        <span>👤</span>
+        <span style="font-weight:600;font-size:14px">${escHtml(d.name)}</span>
+      </div>
+      <div class="status-pill ${hasDone ? 'status-done' : 'status-pending'}">
+        ${hasDone ? '✅ Listo' : '⏳ Pendiente'}
+      </div>
+    `;
+    container.appendChild(row);
+  });
+}
+
+function renderTotals(totals) {
+  const tbody = document.getElementById('summary-tbody');
+  tbody.innerHTML = '';
+  Object.values(totals.dinerTotals).forEach(d => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="name-cell">👤 ${escHtml(d.name)}</td>
+      <td>${totals.currencySymbol} ${d.subtotal.toFixed(2)}</td>
+      <td>${totals.currencySymbol} ${d.tip.toFixed(2)}</td>
+      <td class="total-cell">${totals.currencySymbol} ${d.total.toFixed(2)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('grand-total-display').textContent =
+    `${totals.currencySymbol} ${totals.grandTotal.toFixed(2)}`;
+  document.getElementById('tip-display').textContent =
+    totals.tipTotal > 0 ? `Incluye propina: ${totals.currencySymbol} ${totals.tipTotal.toFixed(2)}` : '';
+  document.getElementById('totals-section').style.display = 'block';
+}
+
+let refreshTimer = null;
+function autoRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(refreshTotals, 8000);
+  refreshTotals();
+}
+
+// Utils
+function uuidShort() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showToast(msg, duration = 2500) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
+}
+</script>
+</body>
+</html>

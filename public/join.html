@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>¿Qué consumiste? 🍽️</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<div class="app-header">
+  <span class="logo">🍽️</span>
+  <div>
+    <h1>Tu consumo</h1>
+    <div class="subtitle" id="header-session">Cargando...</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Loading -->
+  <div id="view-loading" class="card loading">
+    <div class="spinner"></div>
+    <p style="color:var(--text-secondary); font-size:14px">Cargando sesión...</p>
+  </div>
+
+  <!-- Error -->
+  <div id="view-error" style="display:none" class="card">
+    <div class="empty-state">
+      <div class="icon">😕</div>
+      <p>No se encontró esta sesión.<br>Pide el link al organizador.</p>
+    </div>
+  </div>
+
+  <!-- Select who you are -->
+  <div id="view-select-diner" style="display:none">
+    <div class="card">
+      <div class="card-title"><span class="icon">👤</span> ¿Quién eres?</div>
+      <p style="font-size:14px; color:var(--text-secondary); margin-bottom:16px">
+        Selecciona tu nombre de la lista:
+      </p>
+      <div id="diner-options" style="display:flex;flex-direction:column;gap:10px"></div>
+    </div>
+  </div>
+
+  <!-- Input mode: select items or manual -->
+  <div id="view-input" style="display:none">
+
+    <!-- Mode toggle -->
+    <div class="card" style="padding:14px">
+      <div class="tip-mode-tabs" style="margin-bottom:0">
+        <div class="tip-tab active" id="mode-tab-items" onclick="setInputMode('items')">
+          🧾 Seleccionar ítems
+        </div>
+        <div class="tip-tab" id="mode-tab-manual" onclick="setInputMode('manual')">
+          ✏️ Monto total
+        </div>
+      </div>
+    </div>
+
+    <!-- Items mode -->
+    <div id="mode-items">
+      <div class="card">
+        <div class="card-title">
+          <span class="icon">🧾</span>
+          <span>Marca lo que consumiste</span>
+        </div>
+        <p style="font-size:13px; color:var(--text-secondary); margin-bottom:14px">
+          Toca cada ítem para seleccionarlo. Si fue compartido, la app lo divide automáticamente.
+        </p>
+        <div id="join-items-list" class="items-list"></div>
+      </div>
+
+      <div class="card" id="selection-summary" style="display:none">
+        <div class="card-title"><span class="icon">💰</span> Tu consumo (estimado)</div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--text-secondary);font-size:14px">Subtotal:</span>
+          <span style="font-weight:700;font-size:18px;color:var(--primary)" id="my-subtotal">S/ 0.00</span>
+        </div>
+        <p style="font-size:12px;color:var(--text-secondary);margin-top:6px">
+          * El total final incluirá propina y puede variar si otros también marcan los mismos ítems.
+        </p>
+      </div>
+
+      <button class="btn btn-primary" onclick="submitSelection()" id="btn-confirm-items">
+        ✅ Confirmar mi selección
+      </button>
+    </div>
+
+    <!-- Manual mode -->
+    <div id="mode-manual" style="display:none">
+      <div class="card">
+        <div class="card-title"><span class="icon">✏️</span> Ingresa tu monto</div>
+        <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px">
+          ¿Cuánto gastaste en total? (solo tu consumo, sin propina):
+        </p>
+        <div class="input-group">
+          <label id="manual-currency-label">Monto (S/)</label>
+          <input type="number" id="manual-amount" placeholder="0.00" step="0.01" min="0"
+            style="font-size:24px;font-weight:700;text-align:center" oninput="updateManualPreview()">
+        </div>
+        <div id="manual-preview" style="display:none;text-align:center;padding:12px;background:var(--primary-light);border-radius:10px;margin-top:8px">
+          <div style="font-size:13px;color:var(--text-secondary)">Ingresaste</div>
+          <div style="font-size:28px;font-weight:800;color:var(--primary)" id="manual-preview-amount">S/ 0.00</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="submitManual()">
+        ✅ Confirmar monto
+      </button>
+    </div>
+  </div>
+
+  <!-- Done / Personal summary -->
+  <div id="view-done" style="display:none">
+    <div class="personal-card">
+      <div class="greeting" id="done-greeting">¡Listo, <span id="done-name"></span>!</div>
+      <div style="font-size:14px;opacity:0.8;margin-bottom:16px">Tu total a pagar es:</div>
+      <div class="amount" id="done-total">S/ 0.00</div>
+      <div class="breakdown" id="done-breakdown"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="icon">🧾</span> Detalle</div>
+      <div id="done-items-detail"></div>
+    </div>
+
+    <div class="card" style="text-align:center;background:var(--primary-light)">
+      <div style="font-size:32px;margin-bottom:8px">⏳</div>
+      <p style="font-size:14px;color:var(--primary);font-weight:600">
+        El organizador verá el resumen completo cuando todos hayan confirmado.
+      </p>
+    </div>
+
+    <button class="btn btn-outline" onclick="editSelection()">
+      ✏️ Editar mi selección
+    </button>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const sessionId = window.location.pathname.split('/join/')[1];
+let session = null;
+let myDiner = null;
+let selectedItems = new Set();
+let inputMode = 'items';
+
+async function init() {
+  if (!sessionId) { showView('error'); return; }
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}`);
+    if (!res.ok) { showView('error'); return; }
+    session = await res.json();
+    document.getElementById('header-session').textContent =
+      session.diners.length + ' comensales • ' + session.currencySymbol;
+    document.getElementById('manual-currency-label').textContent = `Monto (${session.currencySymbol})`;
+
+    // Check if user already set a name cookie
+    const savedId = localStorage.getItem('dinerId_' + sessionId);
+    if (savedId) {
+      const diner = session.diners.find(d => d.id === savedId);
+      if (diner) {
+        myDiner = diner;
+        // Check if already assigned
+        if (session.assignments[diner.id] !== undefined || session.manualAmounts[diner.id] !== undefined) {
+          await showDoneView();
+          return;
+        }
+        showView('input');
+        renderJoinItems();
+        return;
+      }
+    }
+    showView('select-diner');
+    renderDinerOptions();
+  } catch(e) {
+    showView('error');
+  }
+}
+
+function renderDinerOptions() {
+  const container = document.getElementById('diner-options');
+  container.innerHTML = '';
+  session.diners.forEach(d => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-outline';
+    btn.style.justifyContent = 'flex-start';
+    btn.style.gap = '12px';
+
+    const alreadyDone = session.assignments[d.id] !== undefined || session.manualAmounts[d.id] !== undefined;
+    btn.innerHTML = `
+      <span style="font-size:20px">👤</span>
+      <span style="flex:1;text-align:left">${escHtml(d.name)}</span>
+      ${alreadyDone ? '<span class="badge badge-green">✅ Listo</span>' : ''}
+    `;
+    if (!alreadyDone) {
+      btn.onclick = () => selectDiner(d);
+    } else {
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+    }
+    container.appendChild(btn);
+  });
+}
+
+async function selectDiner(diner) {
+  myDiner = diner;
+  localStorage.setItem('dinerId_' + sessionId, diner.id);
+  showView('input');
+  await refreshSession();
+  renderJoinItems();
+}
+
+async function refreshSession() {
+  const res = await fetch(`/api/sessions/${sessionId}`);
+  if (res.ok) session = await res.json();
+}
+
+function renderJoinItems() {
+  const container = document.getElementById('join-items-list');
+  container.innerHTML = '';
+
+  if (!session.items || session.items.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">⏳</div>
+        <p style="font-weight:600;margin-bottom:8px">El organizador aún no ha cargado los ítems</p>
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">Espera un momento y toca Actualizar</p>
+        <button class="btn btn-secondary" onclick="retryLoadItems()" style="width:auto;padding:10px 20px">
+          🔄 Actualizar
+        </button>
+      </div>`;
+    // Auto-retry every 4 seconds
+    setTimeout(() => retryLoadItems(true), 4000);
+    return;
+  }
+
+  session.items.forEach(item => {
+    const row = document.createElement('div');
+    const isSelected = selectedItems.has(item.id);
+    row.className = 'item-row' + (isSelected ? ' selected' : '');
+    row.dataset.id = item.id;
+    row.onclick = () => toggleItem(item.id, row);
+
+    // Count how many others already picked this
+    let sharedWith = 0;
+    session.diners.forEach(d => {
+      if (d.id !== myDiner.id && session.assignments[d.id]?.includes(item.id)) sharedWith++;
+    });
+    const totalShare = sharedWith + (isSelected ? 1 : 0);
+    const unitPrice = (item.price * item.quantity);
+
+    row.innerHTML = `
+      <div class="item-check">${isSelected ? '✓' : ''}</div>
+      <div style="flex:1">
+        <div class="item-name">${escHtml(item.name)}</div>
+        ${item.quantity > 1 ? `<div class="item-qty">x${item.quantity}</div>` : ''}
+        ${sharedWith > 0 ? `<div class="item-shared">Compartido con ${sharedWith} persona${sharedWith > 1 ? 's' : ''}</div>` : ''}
+      </div>
+      <div style="text-align:right">
+        <div class="item-price">${session.currencySymbol} ${unitPrice.toFixed(2)}</div>
+        ${totalShare > 1 ? `<div class="item-shared">Tu parte: ${session.currencySymbol} ${(unitPrice/totalShare).toFixed(2)}</div>` : ''}
+      </div>
+    `;
+    container.appendChild(row);
+  });
+  updateSelectionSummary();
+}
+
+function toggleItem(itemId, row) {
+  if (selectedItems.has(itemId)) {
+    selectedItems.delete(itemId);
+    row.classList.remove('selected');
+    row.querySelector('.item-check').textContent = '';
+  } else {
+    selectedItems.add(itemId);
+    row.classList.add('selected');
+    row.querySelector('.item-check').textContent = '✓';
+  }
+  updateSelectionSummary();
+}
+
+function updateSelectionSummary() {
+  const summary = document.getElementById('selection-summary');
+  const subtotalEl = document.getElementById('my-subtotal');
+  if (selectedItems.size === 0) { summary.style.display = 'none'; return; }
+
+  let subtotal = 0;
+  session.items.forEach(item => {
+    if (selectedItems.has(item.id)) subtotal += item.price * item.quantity;
+  });
+  subtotalEl.textContent = `${session.currencySymbol} ${subtotal.toFixed(2)}`;
+  summary.style.display = 'block';
+}
+
+function setInputMode(mode) {
+  inputMode = mode;
+  document.getElementById('mode-tab-items').classList.toggle('active', mode === 'items');
+  document.getElementById('mode-tab-manual').classList.toggle('active', mode === 'manual');
+  document.getElementById('mode-items').style.display = mode === 'items' ? 'block' : 'none';
+  document.getElementById('mode-manual').style.display = mode === 'manual' ? 'block' : 'none';
+}
+
+function updateManualPreview() {
+  const val = parseFloat(document.getElementById('manual-amount').value) || 0;
+  const preview = document.getElementById('manual-preview');
+  document.getElementById('manual-preview-amount').textContent =
+    `${session.currencySymbol} ${val.toFixed(2)}`;
+  preview.style.display = val > 0 ? 'block' : 'none';
+}
+
+async function submitSelection() {
+  if (selectedItems.size === 0) { showToast('Selecciona al menos un ítem'); return; }
+  await assign({ itemIds: [...selectedItems] });
+}
+
+async function submitManual() {
+  const val = parseFloat(document.getElementById('manual-amount').value) || 0;
+  if (val <= 0) { showToast('Ingresa un monto mayor a 0'); return; }
+  await assign({ manualAmount: val });
+}
+
+async function assign(payload) {
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dinerId: myDiner.id, ...payload })
+    });
+    if (!res.ok) throw new Error();
+    session = await res.json();
+    await showDoneView();
+  } catch(e) {
+    showToast('Error al guardar. Intenta de nuevo.');
+  }
+}
+
+async function showDoneView() {
+  // Get totals
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/totals`);
+    const totals = await res.json();
+    const myTotal = totals.dinerTotals[myDiner.id];
+
+    document.getElementById('done-name').textContent = myDiner.name;
+    document.getElementById('done-total').textContent =
+      `${totals.currencySymbol} ${myTotal.total.toFixed(2)}`;
+    document.getElementById('done-breakdown').textContent =
+      totals.tipTotal > 0
+        ? `Consumo: ${totals.currencySymbol} ${myTotal.subtotal.toFixed(2)} + Propina: ${totals.currencySymbol} ${myTotal.tip.toFixed(2)}`
+        : `Solo consumo (sin propina)`;
+
+    const detail = document.getElementById('done-items-detail');
+    if (myTotal.isManual) {
+      detail.innerHTML = `<p style="font-size:14px;color:var(--text-secondary)">Monto ingresado manualmente: <strong>${totals.currencySymbol} ${myTotal.subtotal.toFixed(2)}</strong></p>`;
+    } else {
+      detail.innerHTML = '';
+      myTotal.items.forEach(item => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);font-size:14px';
+        row.innerHTML = `<span>${escHtml(item.name)}${item.quantity > 1 ? ' x'+item.quantity : ''}</span><span style="font-weight:600">${totals.currencySymbol} ${(item.price*item.quantity).toFixed(2)}</span>`;
+        detail.appendChild(row);
+      });
+    }
+
+    showView('done');
+  } catch(e) {
+    // Show done without totals
+    document.getElementById('done-name').textContent = myDiner.name;
+    document.getElementById('done-total').textContent = '—';
+    document.getElementById('done-breakdown').textContent = 'El organizador calculará el total final';
+    showView('done');
+  }
+}
+
+async function retryLoadItems(silent = false) {
+  await refreshSession();
+  if (session.items && session.items.length > 0) {
+    renderJoinItems();
+  } else if (!silent) {
+    showToast('El organizador aún no guardó los ítems');
+    setTimeout(() => retryLoadItems(true), 4000);
+  } else {
+    setTimeout(() => retryLoadItems(true), 4000);
+  }
+}
+
+async function editSelection() {
+  selectedItems.clear();
+  await refreshSession();
+  if (session.assignments[myDiner.id]) {
+    session.assignments[myDiner.id].forEach(id => selectedItems.add(id));
+  }
+  showView('input');
+  renderJoinItems();
+}
+
+function showView(name) {
+  ['loading','error','select-diner','input','done'].forEach(v => {
+    document.getElementById('view-' + v).style.display = v === name ? 'block' : 'none';
+  });
+}
+
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showToast(msg, duration = 2500) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
+}
+
+// Init
+setInputMode('items');
+init();
+</script>
+</body>
+</html>
