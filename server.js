@@ -106,15 +106,16 @@ app.post('/api/sessions/:id/scan', upload.single('receipt'), async (req, res) =>
 Responde ÚNICAMENTE con un JSON válido con esta estructura exacta (sin texto adicional):
 {
   "items": [
-    { "id": "1", "name": "Nombre del plato", "price": 25.50, "quantity": 1 }
+    { "id": "1", "name": "Nombre del plato", "price": 70.00, "quantity": 2 }
   ],
   "subtotal": 100.00,
   "tip": 0,
   "total": 100.00
 }
 - Usa números decimales para precios (no strings)
+- price debe ser el TOTAL de esa línea (precio unitario × cantidad). Ejemplo: 2 Ramen a S/35 c/u → price: 70.00, quantity: 2
 - Si hay propina en la boleta, inclúyela en "tip"
-- Si un ítem aparece múltiples veces, puedes usar quantity > 1 o listarlo por separado
+- Si un ítem aparece múltiples veces, usa quantity > 1 y price = total de esa línea
 - id debe ser un número secuencial como string`
           }
         ]
@@ -212,7 +213,7 @@ function calculateTotals(session) {
         const item = itemMap[itemId];
         if (item) {
           const share = itemShareCount[itemId] > 0 ? itemShareCount[itemId] : 1;
-          subtotal += (item.price * item.quantity) / share;
+          subtotal += item.price / share;
         }
       });
     }
