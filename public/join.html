@@ -66,7 +66,7 @@
           <span>Marca lo que consumiste</span>
         </div>
         <p style="font-size:13px; color:var(--text-secondary); margin-bottom:14px">
-          Toca cada ítem para seleccionarlo. Si fue compartido, la app lo divide automáticamente.
+          Toca cada ítem para seleccionarlo. Si lo compartiste con alguien, indica con cuántos.
         </p>
         <div id="join-items-list" class="items-list"></div>
       </div>
@@ -145,6 +145,7 @@ const sessionId = window.location.pathname.split('/join/')[1];
 let session = null;
 let myDiner = null;
 let selectedItems = new Set();
+let itemDivisors = {};
 let inputMode = 'items';
 
 async function init() {
@@ -238,48 +239,74 @@ function renderJoinItems() {
   }
 
   session.items.forEach(item => {
-    const row = document.createElement('div');
     const isSelected = selectedItems.has(item.id);
-    row.className = 'item-row' + (isSelected ? ' selected' : '');
-    row.dataset.id = item.id;
-    row.onclick = () => toggleItem(item.id, row);
+    const divisor = itemDivisors[item.id] || 1;
 
     // Count how many others already picked this
     let sharedWith = 0;
     session.diners.forEach(d => {
       if (d.id !== myDiner.id && session.assignments[d.id]?.includes(item.id)) sharedWith++;
     });
-    const totalShare = sharedWith + (isSelected ? 1 : 0);
-    const unitPrice = (item.price * item.quantity);
+
+    const wrapper = document.createElement('div');
+    wrapper.style.marginBottom = '10px';
+
+    const row = document.createElement('div');
+    const hasShareOptions = isSelected;
+    row.className = 'item-row' + (isSelected ? ' selected' : '') + (hasShareOptions ? ' has-share-options' : '');
+    row.dataset.id = item.id;
+    row.onclick = () => toggleItem(item.id);
+
+    const myPrice = isSelected ? item.price / divisor : item.price;
 
     row.innerHTML = `
       <div class="item-check">${isSelected ? '✓' : ''}</div>
       <div style="flex:1">
         <div class="item-name">${escHtml(item.name)}</div>
         ${item.quantity > 1 ? `<div class="item-qty">x${item.quantity}</div>` : ''}
-        ${sharedWith > 0 ? `<div class="item-shared">Compartido con ${sharedWith} persona${sharedWith > 1 ? 's' : ''}</div>` : ''}
+        ${sharedWith > 0 && !isSelected ? `<div class="item-shared">También lo pidió otro comensal</div>` : ''}
       </div>
       <div style="text-align:right">
-        <div class="item-price">${session.currencySymbol} ${unitPrice.toFixed(2)}</div>
-        ${totalShare > 1 ? `<div class="item-shared">Tu parte: ${session.currencySymbol} ${(unitPrice/totalShare).toFixed(2)}</div>` : ''}
+        <div class="item-price">${session.currencySymbol} ${item.price.toFixed(2)}</div>
+        ${isSelected && divisor > 1 ? `<div class="item-shared">Tu parte: ${session.currencySymbol} ${myPrice.toFixed(2)}</div>` : ''}
       </div>
     `;
-    container.appendChild(row);
+    wrapper.appendChild(row);
+
+    if (isSelected) {
+      const shareDiv = document.createElement('div');
+      shareDiv.className = 'share-options';
+      shareDiv.innerHTML = `
+        <span class="share-label">¿Lo compartiste?</span>
+        <button class="share-btn ${divisor===1?'active':''}" onclick="event.stopPropagation();setDivisor('${item.id}',1)">Solo yo</button>
+        <button class="share-btn ${divisor===2?'active':''}" onclick="event.stopPropagation();setDivisor('${item.id}',2)">Entre 2</button>
+        <button class="share-btn ${divisor===3?'active':''}" onclick="event.stopPropagation();setDivisor('${item.id}',3)">Entre 3</button>
+      `;
+      wrapper.appendChild(shareDiv);
+    }
+
+    container.appendChild(wrapper);
   });
   updateSelectionSummary();
 }
 
-function toggleItem(itemId, row) {
+function toggleItem(itemId) {
   if (selectedItems.has(itemId)) {
     selectedItems.delete(itemId);
-    row.classList.remove('selected');
-    row.querySelector('.item-check').textContent = '';
+    delete itemDivisors[itemId];
   } else {
     selectedItems.add(itemId);
-    row.classList.add('selected');
-    row.querySelector('.item-check').textContent = '✓';
   }
-  updateSelectionSummary();
+  renderJoinItems();
+}
+
+function setDivisor(itemId, divisor) {
+  if (divisor === 1) {
+    delete itemDivisors[itemId];
+  } else {
+    itemDivisors[itemId] = divisor;
+  }
+  renderJoinItems();
 }
 
 function updateSelectionSummary() {
@@ -289,7 +316,10 @@ function updateSelectionSummary() {
 
   let subtotal = 0;
   session.items.forEach(item => {
-    if (selectedItems.has(item.id)) subtotal += item.price * item.quantity;
+    if (selectedItems.has(item.id)) {
+      const divisor = itemDivisors[item.id] || 1;
+      subtotal += item.price / divisor;
+    }
   });
   subtotalEl.textContent = `${session.currencySymbol} ${subtotal.toFixed(2)}`;
   summary.style.display = 'block';
@@ -313,7 +343,9 @@ function updateManualPreview() {
 
 async function submitSelection() {
   if (selectedItems.size === 0) { showToast('Selecciona al menos un ítem'); return; }
-  await assign({ itemIds: [...selectedItems] });
+  const divisorsToSend = {};
+  Object.entries(itemDivisors).forEach(([id, d]) => { if (d > 1) divisorsToSend[id] = d; });
+  await assign({ itemIds: [...selectedItems], itemDivisors: divisorsToSend });
 }
 
 async function submitManual() {
@@ -360,7 +392,7 @@ async function showDoneView() {
       myTotal.items.forEach(item => {
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);font-size:14px';
-        row.innerHTML = `<span>${escHtml(item.name)}${item.quantity > 1 ? ' x'+item.quantity : ''}</span><span style="font-weight:600">${totals.currencySymbol} ${(item.price*item.quantity).toFixed(2)}</span>`;
+        row.innerHTML = `<span>${escHtml(item.name)}${item.quantity > 1 ? ' x'+item.quantity : ''}</span><span style="font-weight:600">${totals.currencySymbol} ${item.price.toFixed(2)}</span>`;
         detail.appendChild(row);
       });
     }
@@ -389,9 +421,13 @@ async function retryLoadItems(silent = false) {
 
 async function editSelection() {
   selectedItems.clear();
+  itemDivisors = {};
   await refreshSession();
   if (session.assignments[myDiner.id]) {
     session.assignments[myDiner.id].forEach(id => selectedItems.add(id));
+  }
+  if (session.itemDivisors?.[myDiner.id]) {
+    Object.assign(itemDivisors, session.itemDivisors[myDiner.id]);
   }
   showView('input');
   renderJoinItems();

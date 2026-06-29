@@ -402,6 +402,45 @@ body {
 /* Scroll hint */
 .scroll-hint { text-align: center; font-size: 12px; color: var(--text-secondary); padding: 8px; }
 
+/* Share options (join.html - split item between people) */
+.item-row.has-share-options {
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border-bottom: none;
+}
+.share-options {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--primary-light);
+  border: 1.5px solid var(--primary);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+}
+.share-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+.share-btn {
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1.5px solid var(--primary);
+  background: white;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.share-btn.active {
+  background: var(--primary);
+  color: white;
+}
+
 @media (prefers-color-scheme: dark) {
   /* intentionally minimal dark mode */
   body { background: #1A1A1A; color: #F0F0F0; }

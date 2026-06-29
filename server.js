@@ -53,6 +53,7 @@ app.post('/api/sessions', (req, res) => {
     tip: { mode: 'proportional', amount: 0, percent: 0 },
     assignments: {},
     manualAmounts: {},
+    itemDivisors: {},
     status: 'setup'
   };
   saveSession(id, session);
@@ -156,21 +157,27 @@ app.post('/api/sessions/:id/assign', (req, res) => {
   const session = getSession(req.params.id);
   if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
 
-  const { dinerId, itemIds, manualAmount } = req.body;
+  const { dinerId, itemIds, manualAmount, itemDivisors: newDivisors } = req.body;
 
   const assignments = { ...session.assignments };
   const manualAmounts = { ...session.manualAmounts };
+  const itemDivisors = { ...(session.itemDivisors || {}) };
 
   if (manualAmount !== undefined && manualAmount !== null) {
     manualAmounts[dinerId] = parseFloat(manualAmount) || 0;
-    // Remove item assignments for this diner if using manual
     delete assignments[dinerId];
+    delete itemDivisors[dinerId];
   } else {
     assignments[dinerId] = itemIds || [];
     delete manualAmounts[dinerId];
+    if (newDivisors && Object.keys(newDivisors).length > 0) {
+      itemDivisors[dinerId] = newDivisors;
+    } else {
+      delete itemDivisors[dinerId];
+    }
   }
 
-  const updated = { ...session, assignments, manualAmounts };
+  const updated = { ...session, assignments, manualAmounts, itemDivisors };
   saveSession(req.params.id, updated);
   res.json(updated);
 });
@@ -186,12 +193,12 @@ app.get('/api/sessions/:id/totals', (req, res) => {
 
 function calculateTotals(session) {
   const { items, diners, assignments, manualAmounts, tip } = session;
+  const itemDivisors = session.itemDivisors || {};
 
-  // Map item price by id (per unit)
   const itemMap = {};
   items.forEach(item => { itemMap[item.id] = item; });
 
-  // Count how many diners share each item
+  // Count how many diners selected each item (fallback when no explicit divisor)
   const itemShareCount = {};
   items.forEach(item => { itemShareCount[item.id] = 0; });
   diners.forEach(diner => {
@@ -201,7 +208,6 @@ function calculateTotals(session) {
     });
   });
 
-  // Subtotal per diner (from items)
   const dinerSubtotals = {};
   diners.forEach(diner => {
     let subtotal = 0;
@@ -212,8 +218,10 @@ function calculateTotals(session) {
       dinerItems.forEach(itemId => {
         const item = itemMap[itemId];
         if (item) {
-          const share = itemShareCount[itemId] > 0 ? itemShareCount[itemId] : 1;
-          subtotal += item.price / share;
+          const explicitDivisor = itemDivisors[diner.id]?.[itemId];
+          const autoDivisor = itemShareCount[itemId] > 0 ? itemShareCount[itemId] : 1;
+          const divisor = explicitDivisor || autoDivisor;
+          subtotal += item.price / divisor;
         }
       });
     }
