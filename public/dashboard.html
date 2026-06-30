@@ -559,9 +559,45 @@
 <div class="modal-overlay" id="gmail-modal">
   <div class="modal">
     <div class="modal-title">📧 Sincronizar Gmail</div>
-    <div id="gmail-content">Cargando...</div>
-    <div class="btn-row">
-      <button class="btn btn-secondary" onclick="closeModal('gmail-modal')">Cerrar</button>
+    <div id="gmail-not-configured" style="display:none">
+      <div class="info-banner">⚙️ Gmail no está configurado. Las variables de entorno GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET deben estar en Railway.</div>
+      <button class="btn btn-secondary" style="width:100%;margin-top:16px" onclick="closeModal('gmail-modal')">Cerrar</button>
+    </div>
+    <div id="gmail-connect" style="display:none">
+      <p style="margin-bottom:16px;color:var(--text-secondary)">Conecta tu Gmail para importar automáticamente correos de BCP, Interbank, BBVA, Scotiabank.</p>
+      <button class="btn btn-primary" style="width:100%;margin-bottom:8px" onclick="window.location='/api/gmail/auth'">🔗 Conectar Gmail</button>
+      <button class="btn btn-secondary" style="width:100%" onclick="closeModal('gmail-modal')">Cancelar</button>
+    </div>
+    <div id="gmail-sync" style="display:none">
+      <div class="info-banner">✅ Gmail conectado</div>
+      <div class="form-group">
+        <label>Buscar correos de los últimos</label>
+        <select id="gmail-days" style="width:100%;padding:10px;background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:10px;color:var(--text);outline:none">
+          <option value="7">7 días</option>
+          <option value="30" selected>30 días</option>
+          <option value="60">60 días</option>
+          <option value="90">90 días</option>
+        </select>
+      </div>
+      <div id="gmail-loading" style="display:none;text-align:center;padding:20px">
+        <div class="spinner" style="margin:0 auto;margin-bottom:12px"></div>
+        <p style="color:var(--text-secondary)">Buscando correos bancarios...</p>
+      </div>
+      <div id="gmail-results" style="display:none">
+        <div id="gmail-found-msg" style="font-size:13px;color:var(--text-secondary);margin-bottom:16px"></div>
+        <div id="gmail-txn-list" style="max-height:300px;overflow-y:auto"></div>
+        <div class="btn-row" style="margin-top:16px">
+          <button class="btn btn-secondary" onclick="closeModal('gmail-modal')">Cancelar</button>
+          <button class="btn btn-primary" id="gmail-import-btn" onclick="importSelectedGmail()">Importar</button>
+        </div>
+      </div>
+      <div id="gmail-no-results" style="display:none;text-align:center;padding:20px;color:var(--text-secondary)">
+        <p>📭 No se encontraron correos bancarios en ese período.</p>
+      </div>
+      <div id="gmail-sync-actions" style="display:flex;gap:12px">
+        <button class="btn btn-secondary" style="flex:1" onclick="window.location='/api/gmail/disconnect'">Desconectar</button>
+        <button class="btn btn-primary" style="flex:1" onclick="runGmailSync()">🔄 Buscar</button>
+      </div>
     </div>
   </div>
 </div>
@@ -868,10 +904,107 @@ function resetUpload() {
   document.getElementById('upload-category').value = 'Otros';
 }
 
-function openGmailModal() {
+async function openGmailModal() {
   const modal = document.getElementById('gmail-modal');
-  document.getElementById('gmail-content').innerHTML = '<p>Conectar Gmail (próximamente)</p>';
+  document.getElementById('gmail-not-configured').style.display = 'none';
+  document.getElementById('gmail-connect').style.display = 'none';
+  document.getElementById('gmail-sync').style.display = 'none';
+  document.getElementById('gmail-results').style.display = 'none';
+  document.getElementById('gmail-no-results').style.display = 'none';
+  document.getElementById('gmail-loading').style.display = 'none';
+
+  try {
+    const res = await fetch('/api/gmail/status');
+    const status = await res.json();
+    if (!status.configured) {
+      document.getElementById('gmail-not-configured').style.display = 'block';
+    } else if (!status.connected) {
+      document.getElementById('gmail-connect').style.display = 'block';
+    } else {
+      document.getElementById('gmail-sync').style.display = 'block';
+    }
+  } catch {
+    document.getElementById('gmail-not-configured').style.display = 'block';
+  }
   modal.classList.add('open');
+}
+
+async function runGmailSync() {
+  const days = document.getElementById('gmail-days').value;
+  document.getElementById('gmail-loading').style.display = 'block';
+  document.getElementById('gmail-sync-actions').style.display = 'none';
+  document.getElementById('gmail-results').style.display = 'none';
+  document.getElementById('gmail-no-results').style.display = 'none';
+
+  try {
+    const res = await fetch('/api/gmail/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days: parseInt(days) })
+    });
+    const data = await res.json();
+    document.getElementById('gmail-loading').style.display = 'none';
+
+    if (!res.ok) {
+      if (data.needsReauth) {
+        showToast('Sesión expirada. Reconecta Gmail.');
+        window.location = '/api/gmail/auth';
+        return;
+      }
+      throw new Error(data.error || 'Error');
+    }
+
+    document.getElementById('gmail-sync-actions').style.display = 'flex';
+    if (!data.transactions || !data.transactions.length) {
+      document.getElementById('gmail-no-results').style.display = 'block';
+      return;
+    }
+
+    gmailFoundTxns = data.transactions;
+    document.getElementById('gmail-found-msg').textContent = `Se encontraron ${data.found} transacciones en ${data.scanned} correos.`;
+    renderGmailResults(data.transactions);
+    document.getElementById('gmail-results').style.display = 'block';
+  } catch(e) {
+    document.getElementById('gmail-loading').style.display = 'none';
+    document.getElementById('gmail-sync-actions').style.display = 'flex';
+    showToast('❌ ' + e.message);
+  }
+}
+
+let gmailFoundTxns = [];
+
+function renderGmailResults(txns) {
+  const list = document.getElementById('gmail-txn-list');
+  list.innerHTML = txns.map((t, i) => `
+    <div style="display:flex;gap:12px;padding:10px;border-bottom:1px solid var(--border);align-items:center">
+      <input type="checkbox" class="gmail-check" id="gcheck-${i}" checked style="cursor:pointer">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:14px">${esc(t.description)}</div>
+        <div style="font-size:11px;color:var(--text-secondary)">${t.date} · ${CAT_ICONS[t.category]||'📦'} ${t.category}</div>
+      </div>
+      <div style="font-weight:700;text-align:right;color:${t.type==='income'?'#16a34a':'#dc2626'}">${t.type==='income'?'+':'-'}S/ ${parseFloat(t.amount).toFixed(2)}</div>
+    </div>
+  `).join('');
+}
+
+async function importSelectedGmail() {
+  const selected = gmailFoundTxns.filter((_, i) => {
+    const cb = document.getElementById(`gcheck-${i}`);
+    return cb && cb.checked;
+  });
+  if (!selected.length) { showToast('Selecciona al menos una'); return; }
+
+  try {
+    const res = await fetch('/api/gmail/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transactions: selected })
+    });
+    const data = await res.json();
+    closeModal('gmail-modal');
+    showToast(`✅ ${data.imported} importadas`);
+    await loadAll();
+  } catch(e) { showToast('❌ Error'); }
 }
 
 function closeModal(id) {
