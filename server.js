@@ -548,7 +548,22 @@ app.post('/api/gmail/sync', async (req, res) => {
     const client = new Anthropic({ apiKey });
     const results = [];
 
-    for (const msg of messages.slice(0, 150)) {
+    function extractBody(part) {
+      if (part.body && part.body.data) {
+        const decoded = Buffer.from(part.body.data, 'base64').toString('utf-8');
+        if (part.mimeType === 'text/plain') return decoded;
+        if (part.mimeType === 'text/html') return decoded.replace(/<[^>]+>/g, ' ');
+      }
+      if (part.parts) {
+        for (const p of part.parts) {
+          const r = extractBody(p);
+          if (r) return r;
+        }
+      }
+      return '';
+    }
+
+    async function processMessage(msg) {
       try {
         const detail = await gmail.users.messages.get({ userId: 'me', id: msg.id, format: 'full' });
         const payload = detail.data.payload;
@@ -557,24 +572,9 @@ app.post('/api/gmail/sync', async (req, res) => {
         const from = headers.find(h => h.name === 'From')?.value || '';
         const dateHeader = headers.find(h => h.name === 'Date')?.value || '';
 
-        let body = '';
-        function extractBody(part) {
-          if (part.body && part.body.data) {
-            const decoded = Buffer.from(part.body.data, 'base64').toString('utf-8');
-            if (part.mimeType === 'text/plain') return decoded;
-            if (part.mimeType === 'text/html') return decoded.replace(/<[^>]+>/g, ' ');
-          }
-          if (part.parts) {
-            for (const p of part.parts) {
-              const r = extractBody(p);
-              if (r) return r;
-            }
-          }
-          return '';
-        }
-        body = extractBody(payload);
+        let body = extractBody(payload);
         body = body.replace(/\s+/g, ' ').trim().slice(0, 2000);
-        if (!body) continue;
+        if (!body) return null;
 
         const parseRes = await client.messages.create({
           model: 'claude-haiku-4-5-20251001',
@@ -606,16 +606,27 @@ type: "expense" para compras/pagos/débitos, "income" para abonos/depósitos/tra
 
         const text = parseRes.content[0].text.trim();
         const match = text.match(/\{[\s\S]*\}/);
-        if (!match) continue;
+        if (!match) return null;
         const parsed = JSON.parse(match[0]);
         if (parsed.is_transaction && parsed.amount > 0) {
           if (!CATEGORIES.includes(parsed.category)) parsed.category = 'Otros';
-          results.push({ ...parsed, source: 'email', emailId: msg.id });
+          return { ...parsed, source: 'email', emailId: msg.id };
         }
-      } catch { /* skip this email */ }
+        return null;
+      } catch {
+        return null;
+      }
     }
 
-    res.json({ found: results.length, transactions: results, scanned: Math.min(messages.length, 25) });
+    const targets = messages.slice(0, 150);
+    const BATCH_SIZE = 8;
+    for (let i = 0; i < targets.length; i += BATCH_SIZE) {
+      const batch = targets.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(processMessage));
+      results.push(...batchResults.filter(Boolean));
+    }
+
+    res.json({ found: results.length, transactions: results, scanned: targets.length });
   } catch (err) {
     console.error('Gmail sync error:', err);
     if (err.code === 401 || (err.response && err.response.status === 401)) {
