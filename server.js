@@ -467,6 +467,7 @@ Categorías disponibles: ${CATEGORIES.join(', ')}
     if (!match) throw new Error('No se pudo extraer JSON');
     const parsed = JSON.parse(match[0]);
     parsed.amount = Math.abs(parseFloat(parsed.amount) || 0);
+    if (!CATEGORIES.includes(parsed.category)) parsed.category = 'Otros';
     res.json(parsed);
   } catch (err) {
     console.error('Expense scan error:', err);
@@ -607,6 +608,7 @@ type: "expense" para compras/pagos/débitos, "income" para abonos/depósitos/tra
         if (!match) continue;
         const parsed = JSON.parse(match[0]);
         if (parsed.is_transaction && parsed.amount > 0) {
+          if (!CATEGORIES.includes(parsed.category)) parsed.category = 'Otros';
           results.push({ ...parsed, source: 'email', emailId: msg.id });
         }
       } catch { /* skip this email */ }
