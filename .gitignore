@@ -2,3 +2,5 @@ node_modules/
 .env
 sessions.json
 sessions.db
+expenses.json
+gmail-tokens.json
