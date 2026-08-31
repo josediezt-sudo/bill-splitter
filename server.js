@@ -3,35 +3,82 @@ const express = require('express');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const Anthropic = require('@anthropic-ai/sdk');
+const { MongoClient } = require('mongodb');
 const path = require('path');
 const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ===== BILL-SPLITTER STORE =====
+// ===== PERSISTENCE: MongoDB si MONGODB_URI está configurada, si no, archivos locales =====
+const MONGODB_URI = process.env.MONGODB_URI;
+let mongoDb = null;
+
 const STORE_FILE = path.join(__dirname, 'sessions.json');
+const EXPENSES_FILE = path.join(__dirname, 'expenses.json');
+const GMAIL_TOKENS_FILE = path.join(__dirname, 'gmail-tokens.json');
+
 const memStore = new Map();
-try {
-  const saved = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
-  Object.entries(saved).forEach(([k, v]) => memStore.set(k, v));
-  console.log(`Loaded ${memStore.size} sessions from disk`);
-} catch { /* no file yet */ }
+let expensesDB = { transactions: [] };
+let gmailTokens = null;
 
 function persistToDisk() {
-  const obj = Object.fromEntries(memStore);
-  fs.writeFileSync(STORE_FILE, JSON.stringify(obj, null, 2));
+  fs.writeFileSync(STORE_FILE, JSON.stringify(Object.fromEntries(memStore), null, 2));
 }
-
-// ===== EXPENSES DATABASE =====
-const EXPENSES_FILE = path.join(__dirname, 'expenses.json');
-let expensesDB = { transactions: [], nextId: 1 };
-try {
-  expensesDB = JSON.parse(fs.readFileSync(EXPENSES_FILE, 'utf8'));
-} catch { /* fresh start */ }
 
 function saveExpensesDB() {
   fs.writeFileSync(EXPENSES_FILE, JSON.stringify(expensesDB, null, 2));
+}
+
+function stripId(doc) {
+  const { _id, ...rest } = doc;
+  return rest;
+}
+
+function nextExpenseId() {
+  const max = expensesDB.transactions.reduce((m, t) => Math.max(m, parseInt(t.id, 10) || 0), 0);
+  return String(max + 1);
+}
+
+async function loadData() {
+  if (MONGODB_URI) {
+    try {
+      const client = new MongoClient(MONGODB_URI);
+      await client.connect();
+      mongoDb = client.db('billsplitter');
+
+      const sessionDocs = await mongoDb.collection('sessions').find({}).toArray();
+      sessionDocs.forEach(doc => { const s = stripId(doc); memStore.set(s.id, s); });
+
+      const expenseDocs = await mongoDb.collection('expenses').find({}).toArray();
+      expensesDB.transactions = expenseDocs.map(stripId);
+
+      const tokenDoc = await mongoDb.collection('gmailTokens').findOne({ _id: 'main' });
+      if (tokenDoc) gmailTokens = stripId(tokenDoc);
+
+      console.log(`MongoDB conectado — ${memStore.size} sesiones, ${expensesDB.transactions.length} gastos cargados`);
+      return;
+    } catch (err) {
+      console.error('No se pudo conectar a MongoDB, usando almacenamiento local en disco:', err.message);
+      mongoDb = null;
+    }
+  }
+
+  try {
+    const saved = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
+    Object.entries(saved).forEach(([k, v]) => memStore.set(k, v));
+  } catch { /* no file yet */ }
+
+  try {
+    const saved = JSON.parse(fs.readFileSync(EXPENSES_FILE, 'utf8'));
+    expensesDB.transactions = saved.transactions || [];
+  } catch { /* fresh start */ }
+
+  try {
+    gmailTokens = JSON.parse(fs.readFileSync(GMAIL_TOKENS_FILE, 'utf8'));
+  } catch { /* not connected yet */ }
+
+  console.log(`Almacenamiento local en disco — ${memStore.size} sesiones, ${expensesDB.transactions.length} gastos cargados`);
 }
 
 const CATEGORIES = [
@@ -40,8 +87,6 @@ const CATEGORIES = [
 ];
 
 // ===== GMAIL SETUP =====
-const GMAIL_TOKENS_FILE = path.join(__dirname, 'gmail-tokens.json');
-
 function getOAuth2Client() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
@@ -49,11 +94,26 @@ function getOAuth2Client() {
   if (!clientId || !clientSecret) return null;
   const { google } = require('googleapis');
   const client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-  try {
-    const tokens = JSON.parse(fs.readFileSync(GMAIL_TOKENS_FILE, 'utf8'));
-    client.setCredentials(tokens);
-  } catch { /* not connected yet */ }
+  if (gmailTokens) client.setCredentials(gmailTokens);
   return client;
+}
+
+async function saveGmailTokens(tokens) {
+  gmailTokens = tokens;
+  if (mongoDb) {
+    await mongoDb.collection('gmailTokens').replaceOne({ _id: 'main' }, { _id: 'main', ...tokens }, { upsert: true });
+  } else {
+    fs.writeFileSync(GMAIL_TOKENS_FILE, JSON.stringify(tokens, null, 2));
+  }
+}
+
+async function clearGmailTokens() {
+  gmailTokens = null;
+  if (mongoDb) {
+    await mongoDb.collection('gmailTokens').deleteOne({ _id: 'main' });
+  } else {
+    try { fs.unlinkSync(GMAIL_TOKENS_FILE); } catch {}
+  }
 }
 
 // ===== MULTER =====
@@ -65,10 +125,17 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ===== BILL-SPLITTER HELPERS =====
 function getSession(id) { return memStore.get(id) || null; }
-function saveSession(id, data) { memStore.set(id, data); persistToDisk(); }
+async function saveSession(id, data) {
+  memStore.set(id, data);
+  if (mongoDb) {
+    await mongoDb.collection('sessions').replaceOne({ id }, data, { upsert: true });
+  } else {
+    persistToDisk();
+  }
+}
 
 // ===== BILL-SPLITTER ROUTES =====
-app.post('/api/sessions', (req, res) => {
+app.post('/api/sessions', async (req, res) => {
   const id = uuidv4().slice(0, 8);
   const session = {
     id,
@@ -81,7 +148,7 @@ app.post('/api/sessions', (req, res) => {
     manualAmounts: {},
     status: 'setup'
   };
-  saveSession(id, session);
+  await saveSession(id, session);
   res.json({ id });
 });
 
@@ -91,11 +158,11 @@ app.get('/api/sessions/:id', (req, res) => {
   res.json(session);
 });
 
-app.patch('/api/sessions/:id', (req, res) => {
+app.patch('/api/sessions/:id', async (req, res) => {
   const session = getSession(req.params.id);
   if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
   const updated = { ...session, ...req.body };
-  saveSession(req.params.id, updated);
+  await saveSession(req.params.id, updated);
   res.json(updated);
 });
 
@@ -157,7 +224,7 @@ Responde ÚNICAMENTE con un JSON válido con esta estructura exacta (sin texto a
       scannedTotal: parseFloat(parsed.total) || 0,
       tip: { ...session.tip, amount: parseFloat(parsed.tip) || 0 }
     };
-    saveSession(req.params.id, updatedSession);
+    await saveSession(req.params.id, updatedSession);
     res.json({ items, tip: parsed.tip || 0, total: parsed.total || 0 });
   } catch (err) {
     console.error('OCR error:', err);
@@ -165,7 +232,7 @@ Responde ÚNICAMENTE con un JSON válido con esta estructura exacta (sin texto a
   }
 });
 
-app.post('/api/sessions/:id/assign', (req, res) => {
+app.post('/api/sessions/:id/assign', async (req, res) => {
   const session = getSession(req.params.id);
   if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
 
@@ -182,7 +249,7 @@ app.post('/api/sessions/:id/assign', (req, res) => {
   }
 
   const updated = { ...session, assignments, manualAmounts };
-  saveSession(req.params.id, updated);
+  await saveSession(req.params.id, updated);
   res.json(updated);
 });
 
@@ -315,11 +382,11 @@ app.get('/api/expenses/categories', (req, res) => {
 });
 
 // POST /api/expenses
-app.post('/api/expenses', (req, res) => {
+app.post('/api/expenses', async (req, res) => {
   const { date, description, amount, type, category, notes, source } = req.body;
   if (!amount || !description || !date) return res.status(400).json({ error: 'Faltan campos requeridos' });
   const txn = {
-    id: String(expensesDB.nextId++),
+    id: nextExpenseId(),
     date, description,
     amount: parseFloat(amount),
     type: type || 'expense',
@@ -329,25 +396,28 @@ app.post('/api/expenses', (req, res) => {
     createdAt: new Date().toISOString()
   };
   expensesDB.transactions.push(txn);
-  saveExpensesDB();
+  if (mongoDb) await mongoDb.collection('expenses').insertOne({ ...txn });
+  else saveExpensesDB();
   res.json(txn);
 });
 
 // PUT /api/expenses/:id
-app.put('/api/expenses/:id', (req, res) => {
+app.put('/api/expenses/:id', async (req, res) => {
   const idx = expensesDB.transactions.findIndex(t => t.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'No encontrado' });
   expensesDB.transactions[idx] = { ...expensesDB.transactions[idx], ...req.body, id: req.params.id };
-  saveExpensesDB();
+  if (mongoDb) await mongoDb.collection('expenses').replaceOne({ id: req.params.id }, expensesDB.transactions[idx]);
+  else saveExpensesDB();
   res.json(expensesDB.transactions[idx]);
 });
 
 // DELETE /api/expenses/:id
-app.delete('/api/expenses/:id', (req, res) => {
+app.delete('/api/expenses/:id', async (req, res) => {
   const idx = expensesDB.transactions.findIndex(t => t.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'No encontrado' });
   expensesDB.transactions.splice(idx, 1);
-  saveExpensesDB();
+  if (mongoDb) await mongoDb.collection('expenses').deleteOne({ id: req.params.id });
+  else saveExpensesDB();
   res.json({ ok: true });
 });
 
@@ -409,16 +479,11 @@ Categorías disponibles: ${CATEGORIES.join(', ')}
 app.get('/api/gmail/status', (req, res) => {
   const configured = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
   if (!configured) return res.json({ connected: false, configured: false });
-  try {
-    const tokens = JSON.parse(fs.readFileSync(GMAIL_TOKENS_FILE, 'utf8'));
-    res.json({ connected: !!(tokens && tokens.access_token), configured: true });
-  } catch {
-    res.json({ connected: false, configured: true });
-  }
+  res.json({ connected: !!(gmailTokens && gmailTokens.access_token), configured: true });
 });
 
-app.get('/api/gmail/disconnect', (req, res) => {
-  try { fs.unlinkSync(GMAIL_TOKENS_FILE); } catch {}
+app.get('/api/gmail/disconnect', async (req, res) => {
+  await clearGmailTokens();
   res.redirect('/dashboard?gmail=disconnected');
 });
 
@@ -440,7 +505,7 @@ app.get('/api/gmail/callback', async (req, res) => {
   try {
     const auth = getOAuth2Client();
     const { tokens } = await auth.getToken(code);
-    fs.writeFileSync(GMAIL_TOKENS_FILE, JSON.stringify(tokens, null, 2));
+    await saveGmailTokens(tokens);
     res.redirect('/dashboard?gmail=connected');
   } catch (err) {
     console.error('Gmail callback error:', err);
@@ -551,20 +616,20 @@ type: "expense" para compras/pagos/débitos, "income" para abonos/depósitos/tra
   } catch (err) {
     console.error('Gmail sync error:', err);
     if (err.code === 401 || (err.response && err.response.status === 401)) {
-      try { fs.unlinkSync(GMAIL_TOKENS_FILE); } catch {}
+      await clearGmailTokens();
       return res.status(401).json({ error: 'Sesión de Gmail expirada. Reconecta Gmail.', needsReauth: true });
     }
     res.status(500).json({ error: 'Error al sincronizar Gmail: ' + err.message });
   }
 });
 
-app.post('/api/gmail/import', (req, res) => {
+app.post('/api/gmail/import', async (req, res) => {
   const { transactions } = req.body;
   if (!Array.isArray(transactions)) return res.status(400).json({ error: 'Formato inválido' });
 
   const imported = transactions.map(t => {
     const txn = {
-      id: String(expensesDB.nextId++),
+      id: nextExpenseId(),
       date: t.date,
       description: t.description,
       amount: Math.abs(parseFloat(t.amount) || 0),
@@ -577,7 +642,8 @@ app.post('/api/gmail/import', (req, res) => {
     expensesDB.transactions.push(txn);
     return txn;
   });
-  saveExpensesDB();
+  if (mongoDb && imported.length) await mongoDb.collection('expenses').insertMany(imported.map(t => ({ ...t })));
+  else saveExpensesDB();
   res.json({ imported: imported.length, transactions: imported });
 });
 
@@ -585,7 +651,9 @@ app.post('/api/gmail/import', (req, res) => {
 app.get('/dashboard', (req, res) => res.sendFile(path.join(__dirname, 'public', 'dashboard.html')));
 app.get('/join/:id', (req, res) => res.sendFile(path.join(__dirname, 'public', 'join.html')));
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🍽️  Divisor de Cuentas: http://localhost:${PORT}`);
-  console.log(`📊  Dashboard de Gastos: http://localhost:${PORT}/dashboard\n`);
+loadData().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🍽️  Divisor de Cuentas: http://localhost:${PORT}`);
+    console.log(`📊  Dashboard de Gastos: http://localhost:${PORT}/dashboard\n`);
+  });
 });
