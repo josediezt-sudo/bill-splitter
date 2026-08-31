@@ -536,8 +536,8 @@ app.post('/api/gmail/sync', async (req, res) => {
 
     const listRes = await gmail.users.messages.list({
       userId: 'me',
-      q: `(${bankQuery}) after:${after}`,
-      maxResults: 50
+      q: `(category:purchases OR ${bankQuery}) after:${after}`,
+      maxResults: 200
     });
 
     const messages = listRes.data.messages || [];
@@ -548,7 +548,7 @@ app.post('/api/gmail/sync', async (req, res) => {
     const client = new Anthropic({ apiKey });
     const results = [];
 
-    for (const msg of messages.slice(0, 25)) {
+    for (const msg of messages.slice(0, 150)) {
       try {
         const detail = await gmail.users.messages.get({ userId: 'me', id: msg.id, format: 'full' });
         const payload = detail.data.payload;
@@ -599,6 +599,7 @@ Responde ÚNICAMENTE con JSON válido:
 }
 Categorías: ${CATEGORIES.join(', ')}
 Si el email NO tiene una transacción clara, responde: {"is_transaction": false}
+Si el email es una notificación de intereses, comisiones, mantenimiento de cuenta u otro cargo interno del banco (no una compra o pago a un tercero), responde: {"is_transaction": false} — esos no son gastos de consumo personal.
 type: "expense" para compras/pagos/débitos, "income" para abonos/depósitos/transferencias recibidas`
           }]
         });
